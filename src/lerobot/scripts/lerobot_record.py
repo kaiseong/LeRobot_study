@@ -112,6 +112,7 @@ from lerobot.teleoperators import (  # noqa: F401
     omx_leader,
     so100_leader,
     so101_leader,
+    piper_leader,
 )
 from lerobot.teleoperators.keyboard.teleop_keyboard import KeyboardTeleop
 from lerobot.utils.constants import ACTION, OBS_STR
