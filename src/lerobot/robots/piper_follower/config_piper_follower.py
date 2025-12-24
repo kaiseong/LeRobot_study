@@ -25,7 +25,7 @@ from ..config import RobotConfig
 @dataclass
 class PIPERFollowerConfig(RobotConfig):
     # Port to connect to the arm
-    port: str
+    can_name: str
 
     disable_torque_on_disconnect: bool = True
 
