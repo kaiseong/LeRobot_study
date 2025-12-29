@@ -44,6 +44,7 @@ class PiperLeader(Teleoperator):
         """This teleoperator does not currently provide feedback."""
         return {}
 
+    @property
     def is_connected(self) -> bool:
         return self._sdk is not None
 
@@ -70,6 +71,7 @@ class PiperLeader(Teleoperator):
         finally:
             self._sdk = None
 
+    @property
     def is_calibrated(self) -> bool:
         return self.is_connected()
 

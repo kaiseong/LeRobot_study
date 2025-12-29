@@ -62,6 +62,7 @@ class PiperFollower(Robot):
     # ------------------------------------------------------------------
     # Connection management
     # ------------------------------------------------------------------
+    @property
     def is_connected(self) -> bool:
         return self._sdk is not None
 
@@ -134,6 +135,7 @@ class PiperFollower(Robot):
     # ------------------------------------------------------------------
     # Calibration and configuration
     # ------------------------------------------------------------------
+    @property
     def is_calibrated(self) -> bool:
         return self.is_connected()
 

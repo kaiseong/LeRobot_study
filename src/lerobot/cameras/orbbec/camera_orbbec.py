@@ -7,22 +7,25 @@ import logging
 import time
 
 from threading import Event, Lock, Thread
-from typing import Any
+from typing import Any, List, Tuple, Union
 
 import cv2  
 import numpy as np
 from numpy.typing import NDArray  
 
 try:
-    import pyorbbecsdk as ob  # type: ignore
-except Exception as e:  # pragma: no cover
+    import pyorbbecsdk as ob  
+except Exception as e:  
+    ob = None
     logging.info(f"Could not import orbbec: {e}")
+
 
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 from ..camera import Camera
 from ..configs import ColorMode
 from ..utils import get_cv2_rotation
 from .configuration_orbbec import OrbbecCameraConfig
+
 
 logger = logging.getLogger(__name__)
 
@@ -33,23 +36,22 @@ class OrbbecCamera(Camera):
         super().__init__(config=config)
         self.config = config
         
-        if config.serial_number_or_name.isdigit():
-            self.serial_number = config.serial_number_or_name
-        else:
-            self.serial_number = self._find_serial_number_from_name(config.serial_number_or_name)
+        self.serial_or_name = str(config.serial_number_or_name)
+        self.serial_number: str | None = None
         
         self.fps = config.fps
         self.color_mode = config.color_mode
         self.use_depth = config.use_depth
         self.warmup_s = config.warmup_s
 
-        self._pipeline: ob.Pipline | None = None
+        self._pipeline: ob.Pipeline | None = None
         self._device: ob.Device | None = None
 
         self.thread: Thread | None = None
         self.stop_event: Event | None = None
         self.frame_lock: Lock = Lock()
-        self.latest_frame: NDArray[Any] | None = None
+        self.latest_frame: NDArray[Any] | None = None # COLOR RGB
+        self.latest_depth: NDArray[Any] | None = None # DPETH cached
         self.new_frame_event: Event = Event()
 
         self.rotation: int | None = get_cv2_rotation(config.rotation)
@@ -92,19 +94,18 @@ class OrbbecCamera(Camera):
         for i in range(dev_list.get_count()):
             dev = dev_list.get_device_by_index(i)
             try:
-                if dev.get_device_info().get_serial_number() == self.serial_number:
+                info = dev.get_device_info()
+                sn = str(info.get_serial_number())
+                name = str(info.get_name())
+                if self.serial_or_name == sn or self.serial_or_name == name:
                     device = dev
+                    self.serial_number = sn
                     break
             except Exception:
                 continue
         
         if device is None:
-            # 시리얼 번호가 지정되지 않았으면 첫 번째 장치 사용 (Fallback)
-            if self.serial_number is None: 
-                device = dev_list.get_device_by_index(0)
-                self.serial_number = device.get_device_info().get_serial_number()
-            else:
-                raise RuntimeError(f"Orbbec device with serial '{self.serial_number}' not found.")
+            raise RuntimeError(f"Orbbec device '{self.serial_or_name}' not found (match by serial or name).")
 
         self._device = device
         self._pipeline = ob.Pipeline(device)
@@ -188,35 +189,27 @@ class OrbbecCamera(Camera):
     # Frame acquisition
     # ------------------------------------------------------------------
     
-    def read(self) -> Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
+    def read(self) -> np.ndarray:
         """동기식 읽기 (Blocking)"""
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
-        # 타임아웃 1000ms
         frames = self._pipeline.wait_for_frames(1000)
         if frames is None:
             raise RuntimeError("Timeout waiting for frames.")
 
-        # Color 프레임 처리
         color_frame = frames.get_color_frame()
         if color_frame is None:
             raise RuntimeError("No color frame received.")
         
         color_img = self._process_color(color_frame)
 
-        # Depth 프레임 처리 (설정된 경우)
         if self.use_depth:
             depth_frame = frames.get_depth_frame()
             if depth_frame is None:
-                raise RuntimeError("No depth frame received.")
-            depth_img = self._process_depth(depth_frame)
-            return color_img, depth_img
+                self.latest_depth = self._process_depth(depth_frame)
 
         return color_img
-
-    async def async_read(self):  # type: ignore[override]
-        return self.read()
     
     def _process_color(self, frame: ob.ColorFrame) -> np.ndarray:
         data = frame.get_data()
@@ -249,7 +242,7 @@ class OrbbecCamera(Camera):
         if self.stop_event is None: return
         while not self.stop_event.is_set():
             try:
-                frame_data = self.read()
+                frame_data = self.read()  # always COLOR np.ndarray
                 with self.frame_lock:
                     self.latest_frame = frame_data
                 self.new_frame_event.set()
@@ -262,9 +255,9 @@ class OrbbecCamera(Camera):
     def _start_read_thread(self) -> None:
         if self.thread is not None and self.thread.is_alive(): return
         if self.stop_event: self.stop_event.set()
-        self.stop_event = threading.Event()
+        self.stop_event = Event()
         self.new_frame_event.clear()
-        self.thread = threading.Thread(target=self._read_loop, name=f"{self}_read_loop", daemon=True)
+        self.thread = Thread(target=self._read_loop, name=f"{self}_read_loop", daemon=True)
         self.thread.start()
 
     def _stop_read_thread(self) -> None:
