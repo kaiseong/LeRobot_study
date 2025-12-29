@@ -137,7 +137,7 @@ class PiperFollower(Robot):
     # ------------------------------------------------------------------
     @property
     def is_calibrated(self) -> bool:
-        return self.is_connected()
+        return self.is_connected
 
     def calibrate(self) -> None:
         return

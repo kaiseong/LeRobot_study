@@ -206,7 +206,7 @@ class OrbbecCamera(Camera):
 
         if self.use_depth:
             depth_frame = frames.get_depth_frame()
-            if depth_frame is None:
+            if depth_frame is not None:
                 self.latest_depth = self._process_depth(depth_frame)
 
         return color_img
