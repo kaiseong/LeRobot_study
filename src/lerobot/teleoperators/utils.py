@@ -51,8 +51,12 @@ def make_teleoperator_from_config(config: TeleoperatorConfig) -> Teleoperator:
         return SO100Leader(config)
     elif config.type == "so101_leader":
         from .so101_leader import SO101Leader
-
+    
         return SO101Leader(config)
+    elif config.type == "piper_leader":
+        from .piper_leader import PiperLeader
+
+        return PiperLeader(config)
     elif config.type == "mock_teleop":
         from tests.mocks.mock_teleop import MockTeleop
 

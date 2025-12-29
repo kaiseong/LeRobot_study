@@ -15,4 +15,4 @@
 # limitations under the License.
 
 from .config_piper_leader import PIPERLeaderConfig
-from .piper_leader import PIPERLeader
+from .piper_leader import PiperLeader
