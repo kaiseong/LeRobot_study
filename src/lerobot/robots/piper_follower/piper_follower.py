@@ -153,10 +153,10 @@ class PiperFollower(Robot):
         gripper_msg = self._sdk.GetArmGripperMsgs()
         
         if self.config.use_degrees:
-            current_joints = [math.degrees(p) for p in pos]
+            current_joints = [p for p in pos]
             gripper = gripper_msg[0]
         else:
-            current_joints = list(pos)
+            current_joints = [math.radians(p) for p in pos]
             gripper = math.radians(gripper_msg[0])
         
 
@@ -197,10 +197,8 @@ class PiperFollower(Robot):
             present_dict["gripper"] = present_pose[6]
             
             goal_present = {k: (action[k], present_dict[k]) for k in action}
-            print(f"ori_action: {action}")
             clipped_action = ensure_safe_goal_position(goal_present, self.config.max_relative_target)
             target_joints = [clipped_action[f"j{i}"] for i in range(1, 7)]
-            print(f"clipped_action: {target_joints}")
             target_gripper = clipped_action["gripper"]
             action = clipped_action
 
@@ -208,7 +206,6 @@ class PiperFollower(Robot):
             joints_deg = target_joints
             gripper_deg = target_gripper
         else:
-            # Radian -> Degree
             joints_deg = [math.degrees(j) for j in target_joints]
             gripper_deg = math.degrees(target_gripper)
 
