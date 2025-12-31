@@ -197,10 +197,10 @@ class PiperFollower(Robot):
             present_dict["gripper"] = present_pose[6]
             
             goal_present = {k: (action[k], present_dict[k]) for k in action}
-            
+            print(f"ori_action: {action}")
             clipped_action = ensure_safe_goal_position(goal_present, self.config.max_relative_target)
-            
             target_joints = [clipped_action[f"j{i}"] for i in range(1, 7)]
+            print(f"clipped_action: {target_joints}")
             target_gripper = clipped_action["gripper"]
             action = clipped_action
 

@@ -30,12 +30,12 @@ class PiperLeader(Teleoperator):
     @property
     def action_features(self) -> dict[str, type]:
         return {
-            "j1": float, # rad
-            "j2": float, # rad
-            "j3": float, # rad
-            "j4": float, # rad
-            "j5": float, # rad 
-            "j6": float, # rad
+            "j1": float, # degree
+            "j2": float, # degree
+            "j3": float, # degree
+            "j4": float, # degree
+            "j5": float, # degree 
+            "j6": float, # degree
             "gripper": float, # degree
         }
 
@@ -91,8 +91,9 @@ class PiperLeader(Teleoperator):
         gripper = -2.4 + (101.4/72.75) * (raw_gripper[0]+1.75)
 
         if self.config.use_degrees:
-            pos = [math.degrees(p) for p in pos]
+            pos = [p for p in pos]
         else:
+            pos = [math.radians(p) for p in pos]
             gripper = math.radians(gripper)
 
         dt_ms = (time.perf_counter() - start) *1e3
