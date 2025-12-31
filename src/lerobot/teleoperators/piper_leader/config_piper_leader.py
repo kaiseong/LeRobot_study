@@ -23,5 +23,5 @@ from ..config import TeleoperatorConfig
 @dataclass
 class PIPERLeaderConfig(TeleoperatorConfig):
     # Port to connect to the arm
-    can_name: str
+    can_name: str = "can_master"
     use_degrees = False

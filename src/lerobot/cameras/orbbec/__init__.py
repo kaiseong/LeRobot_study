@@ -13,4 +13,4 @@
 # limitations under the License.
 
 from .camera_orbbec import OrbbecCamera
-from .configuration_orbbec import OrbbecConfig
+from .configuration_orbbec import OrbbecCameraConfig

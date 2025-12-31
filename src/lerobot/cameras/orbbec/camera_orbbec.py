@@ -215,13 +215,23 @@ class OrbbecCamera(Camera):
         data = frame.get_data()
         if data is None:
             raise RuntimeError("Empty color data")
-        
+    
         h, w = frame.get_height(), frame.get_width()
-        img = np.frombuffer(data, dtype=np.uint8).reshape(h, w, 3).copy()
-
+    
+        # 1) 버퍼 → ndarray (여기서는 view일 수 있음)
+        img = np.frombuffer(data, dtype=np.uint8).reshape(h, w, 3)
+    
+        # 2) (중요) OpenCV에 넣기 전에 contiguous 강제 (copy 발생 가능)
+        img = np.ascontiguousarray(img)
+    
+        # 3) 회전
         if self.rotation is not None:
             img = cv2.rotate(img, self.rotation)
-        return img
+            img = np.ascontiguousarray(img)  # 회전 결과도 안전하게
+    
+        # 4) 최종 반환도 contiguous 보장
+        return np.ascontiguousarray(img)
+
 
     def _process_depth(self, frame: ob.DepthFrame) -> np.ndarray:
         data = frame.get_data()
@@ -276,7 +286,10 @@ class OrbbecCamera(Camera):
         with self.frame_lock:
             frame = self.latest_frame
             self.new_frame_event.clear()
-        return frame
+
+        if isinstance(frame, tuple):
+            return (np.ascontiguousarray(frame[0]), np.ascontiguousarray(frame[1]))
+        return np.ascontiguousarray(frame)
     # ------------------------------------------------------------------
     # Discovery
     # ------------------------------------------------------------------
