@@ -27,16 +27,6 @@ logger = logging.getLogger(__name__)
 
 
 class OrbbecCamera(Camera):
-    """
-    Orbbec camera.
-
-    정책:
-      - serial_number_or_name은 받지만 "디바이스 선택"에는 사용하지 않음
-      - 항상 ob.Pipeline() (기본/첫번째 장치)로 구동
-      - (가능하면) FULL_FRAME_REQUIRE + frame_sync 활성화
-      - frame.get_data() -> bytes로 확실히 복사 후 numpy로 변환
-    """
-
     def __init__(self, config: OrbbecCameraConfig):
         super().__init__(config=config)
         self.config = config
@@ -165,11 +155,9 @@ class OrbbecCamera(Camera):
         if ob is None:
             raise RuntimeError("pyorbbecsdk is not installed.")
 
-        # ✅ 항상 기본(첫번째) 장치 사용: 공식 예제 방식
         self._pipeline = ob.Pipeline()
         cfg = ob.Config()
 
-        # 선택적으로 "현재 연결 장치 수"만 로그 (선택에는 사용 X)
         try:
             ctx = ob.Context()
             dev_list = ctx.query_devices()
@@ -187,8 +175,8 @@ class OrbbecCamera(Camera):
         profile_list = self._pipeline.get_stream_profile_list(ob.OBSensorType.COLOR_SENSOR)
         target_format = ob.OBFormat.RGB if self.color_mode == ColorMode.RGB else ob.OBFormat.BGR
 
-        req_w = int(self.capture_width) if self.capture_width else 640
-        req_h = int(self.capture_height) if self.capture_height else 480
+        req_w = int(self.capture_width) if self.capture_width else 1280
+        req_h = int(self.capture_height) if self.capture_height else 720
         req_fps = int(self.fps) if self.fps else 30
 
         color_profile = None
@@ -197,7 +185,6 @@ class OrbbecCamera(Camera):
         except Exception:
             color_profile = None
 
-        # MJPG fallback (많이 안정적)
         if color_profile is None:
             try:
                 color_profile = profile_list.get_video_stream_profile(req_w, req_h, ob.OBFormat.MJPG, req_fps)
@@ -214,6 +201,7 @@ class OrbbecCamera(Camera):
         self.capture_width = int(color_profile.get_width())
         self.capture_height = int(color_profile.get_height())
         self.fps = int(color_profile.get_fps())
+
         try:
             self._color_format = color_profile.get_format()
         except Exception:
@@ -256,12 +244,6 @@ class OrbbecCamera(Camera):
             self._pipeline = None
             raise ConnectionError(f"Failed to start pipeline: {e}")
 
-        # optional convert filter
-        try:
-            self._conv_filter = ob.FormatConvertFilter() if hasattr(ob, "FormatConvertFilter") else None
-        except Exception:
-            self._conv_filter = None
-
         if warmup:
             time.sleep(self.warmup_s)
 
@@ -290,23 +272,67 @@ class OrbbecCamera(Camera):
     def read(self) -> np.ndarray:
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
-
+    
         frames = self._pipeline.wait_for_frames(1000)
         if frames is None:
             raise RuntimeError("Timeout waiting for frames.")
-
+    
         color_frame = frames.get_color_frame()
         if color_frame is None:
             raise RuntimeError("No color frame received.")
-
+    
+        # ===== [DEBUG] 1~10 프레임 저장 (RAW: PCDP 스타일) =====
+        if not hasattr(self, "_debug_frame_idx"):
+            self._debug_frame_idx = 0
+    
+        if self._debug_frame_idx < 10:
+            self._debug_frame_idx += 1
+    
+            h, w = int(color_frame.get_height()), int(color_frame.get_width())
+            fmt = None
+            try:
+                fmt = color_frame.get_format()
+            except Exception:
+                pass
+            
+            raw = color_frame.get_data()
+            rgb = np.frombuffer(raw, dtype=np.uint8).reshape(h, w, 3)
+    
+            # RGB면 보기 편하게 BGR로 저장
+            if fmt is not None and hasattr(ob, "OBFormat") and fmt == ob.OBFormat.RGB:
+                raw_bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+            else:
+                raw_bgr = rgb
+    
+            m = raw_bgr.mean(axis=(0, 1))
+            s = raw_bgr.std(axis=(0, 1))
+            logger.warning(
+                f"[DEBUG RAW #{self._debug_frame_idx}] fmt={fmt}, shape={raw_bgr.shape}, "
+                f"mean={m}, std={s}, firstpix={raw_bgr[0,0]}"
+            )
+            cv2.imwrite(f"/tmp/lerobot_orbbec_raw_{self._debug_frame_idx:02d}.jpg", raw_bgr)
+    
+        # ===== 기존 처리 =====
         color_img = self._process_color(color_frame)
-
+    
+        # ===== [DEBUG] 1~10 프레임 저장 (PROC: _process_color 결과) =====
+        if self._debug_frame_idx <= 10:
+            # color_img가 RGB일 수도 있으니 그냥 그대로 저장(회색 여부 확인 목적이면 충분)
+            m = color_img.mean(axis=(0, 1))
+            s = color_img.std(axis=(0, 1))
+            logger.warning(
+                f"[DEBUG PROC #{self._debug_frame_idx}] shape={color_img.shape}, "
+                f"mean={m}, std={s}, firstpix={color_img[0,0]}"
+            )
+            cv2.imwrite(f"/tmp/lerobot_orbbec_proc_{self._debug_frame_idx:02d}.jpg", color_img)
+    
         if self.use_depth:
             depth_frame = frames.get_depth_frame()
             if depth_frame is not None:
                 self.latest_depth = self._process_depth(depth_frame)
-
+    
         return color_img
+
 
     def _process_color(self, frame: Any) -> np.ndarray:
         h, w = int(frame.get_height()), int(frame.get_width())
@@ -318,7 +344,7 @@ class OrbbecCamera(Camera):
             fmt = self._color_format
 
         if fmt is not self._last_logged_fmt:
-            # logger.warning(f"Orbbec color fmt={fmt}, size={w}x{h}")
+            logger.warning(f"Orbbec color fmt={fmt}, size={w}x{h}")
             self._last_logged_fmt = fmt
 
         stride_bytes = self._get_stride_bytes(frame)
@@ -334,7 +360,6 @@ class OrbbecCamera(Camera):
                 img = cv2.rotate(img, self.rotation)
             return np.ascontiguousarray(img)
 
-        # YUV -> RGB888 via SDK filter (if needed/available)
         if (
             fmt is not None
             and hasattr(ob, "OBFormat")
