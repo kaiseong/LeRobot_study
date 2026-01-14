@@ -27,18 +27,27 @@ logger = logging.getLogger(__name__)
 
 
 class OrbbecCamera(Camera):
+    """
+    Minimal Orbbec camera (RGB-only).
+
+    - color stream: OBFormat.RGB only
+    - no MJPG/YUY/NV12/convert filter/stride handling
+    - raw bytes -> (H,W,3) uint8
+    - optional output color_mode (RGB/BGR)
+    """
+
     def __init__(self, config: OrbbecCameraConfig):
         super().__init__(config=config)
         self.config = config
 
-        # 사용자 입력 값(표기/로그용). 장치 선택에는 사용하지 않음.
+        # kept for logging only (not used for selection)
         self.serial_or_name = str(config.serial_number_or_name)
-        self.serial_number: str | None = self.serial_or_name  # display only
+        self.serial_number: str | None = self.serial_or_name
 
-        self.fps = config.fps
+        self.fps = int(config.fps) if config.fps else 30
         self.color_mode = config.color_mode
         self.use_depth = config.use_depth
-        self.warmup_s = config.warmup_s
+        self.warmup_s = float(config.warmup_s)
 
         self._pipeline: Optional[Any] = None
 
@@ -55,100 +64,26 @@ class OrbbecCamera(Camera):
         self.height = config.height
 
         if self.height and self.width:
-            self.capture_width, self.capture_height = self.width, self.height
+            self.capture_width, self.capture_height = int(self.width), int(self.height)
             if self.rotation in [cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE]:
-                self.capture_width, self.capture_height = self.height, self.width
+                self.capture_width, self.capture_height = int(self.height), int(self.width)
         else:
-            self.capture_width, self.capture_height = None, None
+            # default to 1280x720 if unspecified
+            self.capture_width, self.capture_height = 1280, 720
 
         self._color_format: Any = None
-        self._depth_format: Any = None
+        self._last_logged: bool = False
 
-        self._conv_filter: Optional[Any] = None
-        self._last_logged_fmt: Any = object()
+        # debug counter (optional)
+        self._debug_frame_idx: int = 0
 
     def __str__(self) -> str:
-        # 시리얼을 "표기"만 한다 (선택에는 사용 X)
         return f"{self.__class__.__name__}({self.serial_or_name})"
 
     @property
     def is_connected(self) -> bool:
         return self._pipeline is not None
 
-    # ----------------- helpers -----------------
-    def _get_stride_bytes(self, frame: Any) -> Optional[int]:
-        if hasattr(frame, "get_stride"):
-            try:
-                s = int(frame.get_stride())
-                return s if s > 0 else None
-            except Exception:
-                return None
-        return None
-
-    def _frame_bytes_copy(self, frame: Any) -> bytes:
-        """
-        get_data() 결과를 '확실히 복사한 bytes'로 만든다.
-        (공식 예제/PCDP 스타일)
-        """
-        data = frame.get_data()
-        if data is None:
-            raise RuntimeError("Empty frame data")
-
-        if isinstance(data, np.ndarray):
-            return np.asarray(data).tobytes()
-        if isinstance(data, bytes):
-            return data
-        if isinstance(data, bytearray):
-            return bytes(data)
-        if isinstance(data, memoryview):
-            return data.tobytes()
-        return bytes(data)
-
-    def _u8(self, frame: Any) -> np.ndarray:
-        return np.frombuffer(self._frame_bytes_copy(frame), dtype=np.uint8)
-
-    def _u16(self, frame: Any) -> np.ndarray:
-        return np.frombuffer(self._frame_bytes_copy(frame), dtype=np.uint16)
-
-    def _reshape_hwc3(self, raw_u8: np.ndarray, h: int, w: int, stride_bytes: Optional[int]) -> np.ndarray:
-        if stride_bytes is not None and stride_bytes > 0 and stride_bytes != w * 3:
-            total = h * stride_bytes
-            if raw_u8.size < total:
-                raise RuntimeError(
-                    f"Color buffer too small: raw={raw_u8.size}, expected>={total} (stride={stride_bytes})"
-                )
-            mat = raw_u8[:total].reshape(h, stride_bytes)
-            mat = mat[:, : w * 3]
-            return np.ascontiguousarray(mat.reshape(h, w, 3))
-
-        need = h * w * 3
-        if raw_u8.size < need:
-            raise RuntimeError(f"Color buffer too small: raw={raw_u8.size}, expected>={need}")
-        if raw_u8.size > need:
-            raw_u8 = raw_u8[:need]
-        return np.ascontiguousarray(raw_u8.reshape(h, w, 3))
-
-    def _reshape_hw_u16(self, raw_u16: np.ndarray, h: int, w: int, stride_bytes: Optional[int]) -> np.ndarray:
-        if stride_bytes is not None and stride_bytes > 0:
-            stride_u16 = stride_bytes // 2
-            if stride_u16 > 0 and stride_u16 != w:
-                total = h * stride_u16
-                if raw_u16.size < total:
-                    raise RuntimeError(
-                        f"Depth buffer too small: raw={raw_u16.size}, expected>={total} (stride_bytes={stride_bytes})"
-                    )
-                mat = raw_u16[:total].reshape(h, stride_u16)
-                mat = mat[:, :w]
-                return np.ascontiguousarray(mat)
-
-        need = h * w
-        if raw_u16.size < need:
-            raise RuntimeError(f"Depth buffer too small: raw={raw_u16.size}, expected>={need}")
-        if raw_u16.size > need:
-            raw_u16 = raw_u16[:need]
-        return np.ascontiguousarray(raw_u16.reshape(h, w))
-
-    # ----------------- lifecycle -----------------
     def connect(self, warmup: bool = True) -> None:
         if self.is_connected:
             raise DeviceAlreadyConnectedError(f"{self} is already connected.")
@@ -158,42 +93,15 @@ class OrbbecCamera(Camera):
         self._pipeline = ob.Pipeline()
         cfg = ob.Config()
 
-        try:
-            ctx = ob.Context()
-            dev_list = ctx.query_devices()
-            cnt = dev_list.get_count()
-            if cnt != 1:
-                logger.warning(
-                    f"Orbbec devices detected: {cnt}. "
-                    f"LeRobot OrbbecCamera is configured to use the default/first device. "
-                    f"(serial_or_name '{self.serial_or_name}' is ignored for selection.)"
-                )
-        except Exception:
-            pass
-
-        # Color profile
+        # color stream: RGB only
         profile_list = self._pipeline.get_stream_profile_list(ob.OBSensorType.COLOR_SENSOR)
-        target_format = ob.OBFormat.RGB if self.color_mode == ColorMode.RGB else ob.OBFormat.BGR
 
-        req_w = int(self.capture_width) if self.capture_width else 1280
-        req_h = int(self.capture_height) if self.capture_height else 720
-        req_fps = int(self.fps) if self.fps else 30
+        req_w, req_h, req_fps = int(self.capture_width), int(self.capture_height), int(self.fps)
 
-        color_profile = None
         try:
-            color_profile = profile_list.get_video_stream_profile(req_w, req_h, target_format, req_fps)
+            color_profile = profile_list.get_video_stream_profile(req_w, req_h, ob.OBFormat.RGB, req_fps)
         except Exception:
-            color_profile = None
-
-        if color_profile is None:
-            try:
-                color_profile = profile_list.get_video_stream_profile(req_w, req_h, ob.OBFormat.MJPG, req_fps)
-                logger.warning("Requested RGB/BGR profile not found. Falling back to MJPG profile.")
-            except Exception:
-                color_profile = None
-
-        if color_profile is None:
-            logger.warning(f"Exact profile ({req_w}x{req_h}@{req_fps}) not found. Using default.")
+            logger.warning(f"Exact RGB profile {req_w}x{req_h}@{req_fps} not found. Using default.")
             color_profile = profile_list.get_default_video_stream_profile()
 
         cfg.enable_stream(color_profile)
@@ -201,31 +109,23 @@ class OrbbecCamera(Camera):
         self.capture_width = int(color_profile.get_width())
         self.capture_height = int(color_profile.get_height())
         self.fps = int(color_profile.get_fps())
-
         try:
             self._color_format = color_profile.get_format()
         except Exception:
             self._color_format = None
 
-        # Depth optional
+        # depth optional (kept minimal)
         if self.use_depth:
             depth_list = self._pipeline.get_stream_profile_list(ob.OBSensorType.DEPTH_SENSOR)
-            depth_profile = None
             try:
                 depth_profile = depth_list.get_video_stream_profile(
                     self.capture_width, self.capture_height, ob.OBFormat.Y16, int(self.fps)
                 )
             except Exception:
-                depth_profile = None
-            if depth_profile is None:
                 depth_profile = depth_list.get_default_video_stream_profile()
             cfg.enable_stream(depth_profile)
-            try:
-                self._depth_format = depth_profile.get_format()
-            except Exception:
-                self._depth_format = None
 
-        # PCDP style: FULL_FRAME_REQUIRE + frame_sync (있으면)
+        # PCDP-ish sync (best effort, ignore if not supported)
         try:
             if hasattr(cfg, "set_frame_aggregate_output_mode") and hasattr(ob, "OBFrameAggregateOutputMode"):
                 cfg.set_frame_aggregate_output_mode(ob.OBFrameAggregateOutputMode.FULL_FRAME_REQUIRE)
@@ -265,156 +165,102 @@ class OrbbecCamera(Camera):
                 pass
 
         self._pipeline = None
-        self._conv_filter = None
         logger.info(f"{self} disconnected.")
 
-    # ----------------- read -----------------
     def read(self) -> np.ndarray:
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
-    
+
         frames = self._pipeline.wait_for_frames(1000)
         if frames is None:
             raise RuntimeError("Timeout waiting for frames.")
-    
+
         color_frame = frames.get_color_frame()
         if color_frame is None:
             raise RuntimeError("No color frame received.")
-    
-        # ===== [DEBUG] 1~10 프레임 저장 (RAW: PCDP 스타일) =====
-        if not hasattr(self, "_debug_frame_idx"):
-            self._debug_frame_idx = 0
-    
-        if self._debug_frame_idx < 10:
-            self._debug_frame_idx += 1
-    
-            h, w = int(color_frame.get_height()), int(color_frame.get_width())
-            fmt = None
-            try:
-                fmt = color_frame.get_format()
-            except Exception:
-                pass
-            
-            raw = color_frame.get_data()
-            rgb = np.frombuffer(raw, dtype=np.uint8).reshape(h, w, 3)
-    
-            # RGB면 보기 편하게 BGR로 저장
-            if fmt is not None and hasattr(ob, "OBFormat") and fmt == ob.OBFormat.RGB:
-                raw_bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-            else:
-                raw_bgr = rgb
-    
-            m = raw_bgr.mean(axis=(0, 1))
-            s = raw_bgr.std(axis=(0, 1))
-            logger.warning(
-                f"[DEBUG RAW #{self._debug_frame_idx}] fmt={fmt}, shape={raw_bgr.shape}, "
-                f"mean={m}, std={s}, firstpix={raw_bgr[0,0]}"
-            )
-            cv2.imwrite(f"/tmp/lerobot_orbbec_raw_{self._debug_frame_idx:02d}.jpg", raw_bgr)
-    
-        # ===== 기존 처리 =====
-        color_img = self._process_color(color_frame)
-    
-        # ===== [DEBUG] 1~10 프레임 저장 (PROC: _process_color 결과) =====
-        if self._debug_frame_idx <= 10:
-            # color_img가 RGB일 수도 있으니 그냥 그대로 저장(회색 여부 확인 목적이면 충분)
-            m = color_img.mean(axis=(0, 1))
-            s = color_img.std(axis=(0, 1))
-            logger.warning(
-                f"[DEBUG PROC #{self._debug_frame_idx}] shape={color_img.shape}, "
-                f"mean={m}, std={s}, firstpix={color_img[0,0]}"
-            )
-            cv2.imwrite(f"/tmp/lerobot_orbbec_proc_{self._debug_frame_idx:02d}.jpg", color_img)
-    
+
+        img = self._process_color_rgb_only(color_frame)
+
         if self.use_depth:
             depth_frame = frames.get_depth_frame()
             if depth_frame is not None:
-                self.latest_depth = self._process_depth(depth_frame)
-    
-        return color_img
+                self.latest_depth = self._process_depth_y16(depth_frame)
 
+        return img
 
-    def _process_color(self, frame: Any) -> np.ndarray:
+    def _process_color_rgb_only(self, frame: Any) -> np.ndarray:
+        """
+        Assume: frame data is packed RGB888 (H*W*3 bytes).
+        """
         h, w = int(frame.get_height()), int(frame.get_width())
 
-        fmt = None
-        try:
-            fmt = frame.get_format()
-        except Exception:
-            fmt = self._color_format
+        if not self._last_logged:
+            fmt = None
+            try:
+                fmt = frame.get_format()
+            except Exception:
+                fmt = self._color_format
+            logger.warning(f"Orbbec color fmt={fmt}, size={w}x{h} (RGB-only path)")
+            self._last_logged = True
 
-        if fmt is not self._last_logged_fmt:
-            logger.warning(f"Orbbec color fmt={fmt}, size={w}x{h}")
-            self._last_logged_fmt = fmt
+        data = frame.get_data()
+        if data is None:
+            raise RuntimeError("Empty color data")
 
-        stride_bytes = self._get_stride_bytes(frame)
+        # ensure we own the buffer (avoid SDK lifetime issues)
+        if isinstance(data, (bytes, bytearray)):
+            raw = bytes(data)
+        elif isinstance(data, memoryview):
+            raw = data.tobytes()
+        elif isinstance(data, np.ndarray):
+            raw = np.asarray(data, dtype=np.uint8).tobytes()
+        else:
+            raw = bytes(data)
 
-        # MJPG -> decode
-        if fmt is not None and hasattr(ob, "OBFormat") and fmt == ob.OBFormat.MJPG:
-            jpg = self._u8(frame)
-            img_bgr = cv2.imdecode(jpg, cv2.IMREAD_COLOR)
-            if img_bgr is None:
-                raise RuntimeError("Failed to decode MJPG frame (imdecode returned None)")
-            img = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB) if self.color_mode == ColorMode.RGB else img_bgr
-            if self.rotation is not None:
-                img = cv2.rotate(img, self.rotation)
-            return np.ascontiguousarray(img)
+        arr = np.frombuffer(raw, dtype=np.uint8)
 
-        if (
-            fmt is not None
-            and hasattr(ob, "OBFormat")
-            and fmt not in (ob.OBFormat.RGB, ob.OBFormat.BGR, ob.OBFormat.MJPG)
-            and self._conv_filter is not None
-            and hasattr(ob, "OBConvertFormat")
-        ):
-            convert_format_map = {
-                getattr(ob.OBFormat, "YUYV", None): getattr(ob.OBConvertFormat, "YUYV_TO_RGB888", None),
-                getattr(ob.OBFormat, "YUY2", None): getattr(ob.OBConvertFormat, "YUYV_TO_RGB888", None),
-                getattr(ob.OBFormat, "UYVY", None): getattr(ob.OBConvertFormat, "UYVY_TO_RGB888", None),
-                getattr(ob.OBFormat, "NV12", None): getattr(ob.OBConvertFormat, "NV12_TO_RGB888", None),
-                getattr(ob.OBFormat, "NV21", None): getattr(ob.OBConvertFormat, "NV21_TO_RGB888", None),
-                getattr(ob.OBFormat, "I420", None): getattr(ob.OBConvertFormat, "I420_TO_RGB888", None),
-            }
-            convert_format = convert_format_map.get(fmt)
-            if convert_format is not None:
-                try:
-                    self._conv_filter.set_format_convert_format(convert_format)
-                    rgb_frame = self._conv_filter.process(frame)
-                except Exception:
-                    rgb_frame = None
+        need = h * w * 3
+        if arr.size < need:
+            raise RuntimeError(f"Color buffer too small: {arr.size} < {need}")
+        if arr.size > need:
+            arr = arr[:need]
 
-                if rgb_frame:
-                    hh, ww = int(rgb_frame.get_height()), int(rgb_frame.get_width())
-                    stride2 = self._get_stride_bytes(rgb_frame)
-                    raw = self._u8(rgb_frame)
-                    img_rgb = self._reshape_hwc3(raw, hh, ww, stride2)
+        img_rgb = arr.reshape(h, w, 3)
 
-                    if self.color_mode == ColorMode.BGR:
-                        img_rgb = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
-                    if self.rotation is not None:
-                        img_rgb = cv2.rotate(img_rgb, self.rotation)
-                    return np.ascontiguousarray(img_rgb)
-
-        # RGB/BGR raw
-        raw = self._u8(frame)
-        img = self._reshape_hwc3(raw, h, w, stride_bytes)
-
-        if fmt is not None and hasattr(ob, "OBFormat"):
-            if fmt == ob.OBFormat.BGR and self.color_mode == ColorMode.RGB:
-                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            elif fmt == ob.OBFormat.RGB and self.color_mode == ColorMode.BGR:
-                img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+        # output color mode
+        if self.color_mode == ColorMode.BGR:
+            img = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
+        else:
+            img = img_rgb
 
         if self.rotation is not None:
             img = cv2.rotate(img, self.rotation)
 
         return np.ascontiguousarray(img)
 
-    def _process_depth(self, frame: Any) -> np.ndarray:
+    def _process_depth_y16(self, frame: Any) -> np.ndarray:
         h, w = int(frame.get_height()), int(frame.get_width())
-        stride_bytes = self._get_stride_bytes(frame)
-        raw = self._u16(frame)
-        img = self._reshape_hw_u16(raw, h, w, stride_bytes)
+        data = frame.get_data()
+        if data is None:
+            raise RuntimeError("Empty depth data")
+
+        if isinstance(data, (bytes, bytearray)):
+            raw = bytes(data)
+        elif isinstance(data, memoryview):
+            raw = data.tobytes()
+        elif isinstance(data, np.ndarray):
+            raw = np.asarray(data, dtype=np.uint16).tobytes()
+        else:
+            raw = bytes(data)
+
+        arr = np.frombuffer(raw, dtype=np.uint16)
+        need = h * w
+        if arr.size < need:
+            raise RuntimeError(f"Depth buffer too small: {arr.size} < {need}")
+        if arr.size > need:
+            arr = arr[:need]
+
+        img = arr.reshape(h, w)
 
         if self.rotation is not None:
             img = cv2.rotate(img, self.rotation)
