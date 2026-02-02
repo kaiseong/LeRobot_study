@@ -48,6 +48,11 @@ def make_cameras_from_configs(camera_configs: dict[str, CameraConfig]) -> dict[s
 
             cameras[key] = OrbbecCamera(cfg)
 
+        elif cfg.type == "zmq":
+            from .zmq.camera_zmq import ZMQCamera
+
+            cameras[key] = ZMQCamera(cfg)
+
         else:
             try:
                 cameras[key] = cast(Camera, make_device_from_device_class(cfg))
