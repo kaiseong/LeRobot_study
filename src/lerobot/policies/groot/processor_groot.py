@@ -21,7 +21,7 @@ import numpy as np
 import torch
 from einops import rearrange
 from PIL import Image
-
+import cv2
 from lerobot.utils.import_utils import _transformers_available
 
 if TYPE_CHECKING or _transformers_available:
@@ -277,6 +277,7 @@ class GrootPackInputsStep(ProcessorStep):
             img_keys = [OBS_IMAGE]
         if img_keys:
             cams = [_to_uint8_np_bhwc(obs[k]) for k in img_keys]
+            cams = [np.array([cv2.resize(frame, (224, 224)) for frame in cam]) for cam in cams]
             video = np.stack(cams, axis=1)  # (B, V, H, W, C)
             video = np.expand_dims(video, axis=1)  # (B, 1, V, H, W, C)
             # GR00T validates that video.shape[3] == 3 (channels), so reorder to (B, T, V, C, H, W)
