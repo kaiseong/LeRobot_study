@@ -73,6 +73,7 @@ _transformers_available = is_package_available("transformers")
 _peft_available = is_package_available("peft")
 _scipy_available = is_package_available("scipy")
 _reachy2_sdk_available = is_package_available("reachy2_sdk")
+_rby1_sdk_available = is_package_available("rby1-sdk", "rby1_sdk")
 _can_available = is_package_available("python-can", "can")
 
 

@@ -113,6 +113,7 @@ from lerobot.robots import (  # noqa: F401
     omx_follower,
     openarm_follower,
     piper_follower,
+    rby1,
     reachy2,
     so_follower,
     so100_follower,

@@ -59,6 +59,10 @@ def make_teleoperator_from_config(config: TeleoperatorConfig) -> "Teleoperator":
         from .piper_leader import PiperLeader
 
         return PiperLeader(config)
+    elif config.type == "master_arm":
+        from .master_arm import MasterArm
+
+        return MasterArm(config)
     elif config.type == "mock_teleop":
         from tests.mocks.mock_teleop import MockTeleop
 
