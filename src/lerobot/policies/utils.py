@@ -172,7 +172,11 @@ def build_inference_frame(
     return observation
 
 
-def make_robot_action(action_tensor: PolicyAction, ds_features: dict[str, dict]) -> RobotAction:
+def make_robot_action(
+    action_tensor: PolicyAction,
+    ds_features: dict[str, dict],
+    action_names: list[str] | tuple[str, ...] | None = None,
+) -> RobotAction:
     """Converts a policy's output tensor into a dictionary of named actions.
 
     This function translates the numerical output from a policy model into a
@@ -184,6 +188,8 @@ def make_robot_action(action_tensor: PolicyAction, ds_features: dict[str, dict])
             typically with a batch dimension (e.g., shape [1, action_dim]).
         ds_features: A configuration dictionary containing metadata, including
             the names corresponding to each index of the action tensor.
+        action_names: Optional explicit action names. When omitted, the dataset
+            metadata names are used.
 
     Returns:
         A dictionary mapping action names (e.g., "joint_1_motor") to their
@@ -194,7 +200,7 @@ def make_robot_action(action_tensor: PolicyAction, ds_features: dict[str, dict])
     action_tensor = action_tensor.squeeze(0)
     action_tensor = action_tensor.to("cpu")
 
-    action_names = ds_features[ACTION]["names"]
+    action_names = action_names or ds_features[ACTION]["names"]
     act_processed_policy: RobotAction = {
         f"{name}": float(action_tensor[i]) for i, name in enumerate(action_names)
     }

@@ -74,6 +74,12 @@ from .policy_robot_bridge import (
     PolicyActionToRobotActionProcessorStep,
     RobotActionToPolicyActionProcessorStep,
 )
+from .rby1_subset_processor import (
+    RBY1ExpandRobotActionSubsetProcessorStep,
+    RBY1JointSubsetProcessorStep,
+    get_rby1_selected_action_names,
+    insert_rby1_joint_subset_step,
+)
 from .rename_processor import RenameObservationsProcessorStep
 from .tokenizer_processor import ActionTokenizerProcessorStep, TokenizerProcessorStep
 
@@ -106,13 +112,17 @@ __all__ = [
     "ObservationProcessorStep",
     "PolicyAction",
     "PolicyActionProcessorStep",
+    "PolicyActionToRobotActionProcessorStep",
     "PolicyProcessorPipeline",
     "ProcessorKwargs",
     "ProcessorStep",
     "ProcessorStepRegistry",
+    "RBY1ExpandRobotActionSubsetProcessorStep",
+    "RBY1JointSubsetProcessorStep",
     "RobotAction",
     "RobotActionProcessorStep",
     "RobotObservation",
+    "RobotActionToPolicyActionProcessorStep",
     "RenameObservationsProcessorStep",
     "RewardClassifierProcessorStep",
     "RewardProcessorStep",
@@ -123,8 +133,8 @@ __all__ = [
     "TokenizerProcessorStep",
     "ActionTokenizerProcessorStep",
     "Torch2NumpyActionProcessorStep",
-    "RobotActionToPolicyActionProcessorStep",
-    "PolicyActionToRobotActionProcessorStep",
+    "get_rby1_selected_action_names",
+    "insert_rby1_joint_subset_step",
     "transition_to_batch",
     "TransitionKey",
     "TruncatedProcessorStep",

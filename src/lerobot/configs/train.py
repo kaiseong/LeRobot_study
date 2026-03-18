@@ -34,10 +34,20 @@ TRAIN_CONFIG_NAME = "train_config.json"
 
 
 @dataclass
+class JointSubsetConfig:
+    joint_names: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if not self.joint_names:
+            raise ValueError("joint_subset.joint_names must contain at least one joint key.")
+
+
+@dataclass
 class TrainPipelineConfig(HubMixin):
     dataset: DatasetConfig
     env: envs.EnvConfig | None = None
     policy: PreTrainedConfig | None = None
+    joint_subset: JointSubsetConfig | None = None
     # Set `dir` to where you would like to save all of the run outputs. If you run another training session
     # with the same value for `dir` its contents will be overwritten unless you set `resume` to true.
     output_dir: Path | None = None

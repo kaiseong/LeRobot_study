@@ -95,11 +95,14 @@ from lerobot.policies.utils import make_robot_action
 from lerobot.processor import (
     PolicyAction,
     PolicyProcessorPipeline,
+    RBY1ExpandRobotActionSubsetProcessorStep,
     RobotAction,
     RobotObservation,
     RobotProcessorPipeline,
+    get_rby1_selected_action_names,
     make_default_processors,
 )
+from lerobot.processor.converters import robot_action_observation_to_transition, transition_to_robot_action
 from lerobot.processor.rename_processor import rename_stats
 from lerobot.robots import (  # noqa: F401
     Robot,
@@ -120,6 +123,7 @@ from lerobot.robots import (  # noqa: F401
     so101_follower,
     unitree_g1 as unitree_g1_robot,
 )
+from lerobot.robots.rby1.schema import FULL_ACTION_KEYS
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
     TeleoperatorConfig,
@@ -128,6 +132,7 @@ from lerobot.teleoperators import (  # noqa: F401
     homunculus,
     koch_leader,
     make_teleoperator_from_config,
+    master_arm,
     omx_leader,
     openarm_leader,
     piper_leader,
@@ -301,6 +306,7 @@ def record_loop(
     policy: PreTrainedPolicy | None = None,
     preprocessor: PolicyProcessorPipeline[dict[str, Any], dict[str, Any]] | None = None,
     postprocessor: PolicyProcessorPipeline[PolicyAction, PolicyAction] | None = None,
+    policy_action_names: list[str] | None = None,
     control_time_s: int | None = None,
     single_task: str | None = None,
     display_data: bool = False,
@@ -373,7 +379,11 @@ def record_loop(
                 robot_type=robot.robot_type,
             )
 
-            act_processed_policy: RobotAction = make_robot_action(action_values, dataset.features)
+            act_processed_policy: RobotAction = make_robot_action(
+                action_values,
+                dataset.features,
+                action_names=policy_action_names,
+            )
 
         elif policy is None and isinstance(teleop, Teleoperator):
             act = teleop.get_action()
@@ -400,11 +410,11 @@ def record_loop(
 
         # Applies a pipeline to the action, default is IdentityProcessor
         if policy is not None and act_processed_policy is not None:
-            action_values = act_processed_policy
             robot_action_to_send = robot_action_processor((act_processed_policy, obs))
+            action_values = robot_action_to_send
         else:
-            action_values = act_processed_teleop
             robot_action_to_send = robot_action_processor((act_processed_teleop, obs))
+            action_values = robot_action_to_send
 
         # Send action to robot
         # Action can eventually be clipped using `max_relative_target`,
@@ -414,7 +424,7 @@ def record_loop(
 
         # Write to dataset
         if dataset is not None:
-            action_frame = build_dataset_frame(dataset.features, action_values, prefix=ACTION)
+            action_frame = build_dataset_frame(dataset.features, _sent_action, prefix=ACTION)
             frame = {**observation_frame, **action_frame, "task": single_task}
             dataset.add_frame(frame)
 
@@ -436,6 +446,26 @@ def record_loop(
         timestamp = time.perf_counter() - start_episode_t
 
 
+def _prepare_rby1_record_start(robot: Robot, teleop: Teleoperator | list[Teleoperator] | None) -> None:
+    if robot.name != "rby1" or not getattr(robot.config, "prepare_initial_pose", False):
+        return
+
+    teleop_fixed_action_values: RobotAction = {}
+    if isinstance(teleop, Teleoperator) and getattr(teleop, "name", None) == "master_arm":
+        teleop_fixed_action_values = getattr(teleop, "fixed_action_values", {})
+
+    initial_action = robot.move_to_initial_pose(teleop_fixed_action_values=teleop_fixed_action_values)
+    logging.info("Moved RBY1 to the initial record pose.")
+
+    if isinstance(teleop, Teleoperator) and getattr(teleop, "name", None) == "master_arm":
+        teleop.align_hold_targets(
+            initial_action,
+            wait_timeout_s=robot.config.initial_wait_timeout_s,
+            position_tolerance_rad=robot.config.initial_position_tolerance_rad,
+        )
+        logging.info("Aligned the RBY1 master arm hold targets to the initial record pose.")
+
+
 @parser.wrap()
 def record(cfg: RecordConfig) -> LeRobotDataset:
     init_logging()
@@ -452,6 +482,20 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
     teleop = make_teleoperator_from_config(cfg.teleop) if cfg.teleop is not None else None
 
     teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
+    policy_action_names: list[str] | None = None
+    if robot.name == "rby1":
+        robot_action_processor = RobotProcessorPipeline[
+            tuple[RobotAction, RobotObservation], RobotAction
+        ](
+            steps=[
+                RBY1ExpandRobotActionSubsetProcessorStep(
+                    full_action_names=list(FULL_ACTION_KEYS),
+                    fixed_action_values=getattr(robot, "fixed_action_values", {}),
+                )
+            ],
+            to_transition=robot_action_observation_to_transition,
+            to_output=transition_to_robot_action,
+        )
 
     dataset_features = combine_feature_dicts(
         aggregate_pipeline_dataset_features(
@@ -513,19 +557,27 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
         preprocessor = None
         postprocessor = None
         if cfg.policy is not None:
+            processor_dataset_stats = None
+            if cfg.policy.pretrained_path is None:
+                processor_dataset_stats = rename_stats(dataset.meta.stats, cfg.dataset.rename_map)
             preprocessor, postprocessor = make_pre_post_processors(
                 policy_cfg=cfg.policy,
                 pretrained_path=cfg.policy.pretrained_path,
-                dataset_stats=rename_stats(dataset.meta.stats, cfg.dataset.rename_map),
+                dataset_stats=processor_dataset_stats,
                 preprocessor_overrides={
                     "device_processor": {"device": cfg.policy.device},
                     "rename_observations_processor": {"rename_map": cfg.dataset.rename_map},
                 },
             )
+            policy_action_names = get_rby1_selected_action_names(
+                preprocessor,
+                dataset.features[ACTION]["names"],
+            )
 
         robot.connect()
         if teleop is not None:
             teleop.connect()
+        _prepare_rby1_record_start(robot, teleop)
 
         listener, events = init_keyboard_listener()
 
@@ -549,6 +601,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                     policy=policy,
                     preprocessor=preprocessor,
                     postprocessor=postprocessor,
+                    policy_action_names=policy_action_names,
                     dataset=dataset,
                     control_time_s=cfg.dataset.episode_time_s,
                     single_task=cfg.dataset.single_task,

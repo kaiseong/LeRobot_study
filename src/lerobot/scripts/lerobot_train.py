@@ -30,14 +30,21 @@ from lerobot.configs import parser
 from lerobot.configs.train import TrainPipelineConfig
 from lerobot.datasets.factory import make_dataset
 from lerobot.datasets.sampler import EpisodeAwareSampler
-from lerobot.datasets.utils import cycle
+from lerobot.datasets.utils import cycle, dataset_to_policy_features
 from lerobot.envs.factory import make_env, make_env_pre_post_processors
 from lerobot.envs.utils import close_envs
 from lerobot.optim.factory import make_optimizer_and_scheduler
 from lerobot.policies.factory import make_policy, make_pre_post_processors
 from lerobot.policies.pretrained import PreTrainedPolicy
+from lerobot.processor import RBY1JointSubsetProcessorStep, insert_rby1_joint_subset_step
+from lerobot.robots.rby1.policy_selection import (
+    build_policy_features_for_joint_subset,
+    resolve_joint_subset,
+    slice_stats_for_joint_subset,
+)
 from lerobot.rl.wandb_utils import WandBLogger
 from lerobot.scripts.lerobot_eval import eval_policy_all
+from lerobot.utils.constants import ACTION, OBS_STATE
 from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.logging_utils import AverageMeter, MetricsTracker
 from lerobot.utils.random_utils import set_seed
@@ -223,6 +230,25 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     if not is_main_process:
         dataset = make_dataset(cfg)
 
+    joint_subset_names: tuple[str, ...] | None = None
+    processor_dataset_stats = dataset.meta.stats
+    if cfg.joint_subset is not None:
+        if OBS_STATE not in dataset.meta.features or ACTION not in dataset.meta.features:
+            raise ValueError("joint_subset requires both observation.state and action features in the dataset.")
+
+        joint_subset_names = resolve_joint_subset(cfg.joint_subset.joint_names)
+        dataset_policy_features = dataset_to_policy_features(dataset.meta.features)
+        cfg.policy.input_features, cfg.policy.output_features = build_policy_features_for_joint_subset(
+            all_features=dataset_policy_features,
+            selected_joint_names=joint_subset_names,
+        )
+        processor_dataset_stats = slice_stats_for_joint_subset(
+            dataset.meta.stats,
+            selected_joint_names=joint_subset_names,
+            observation_state_names=dataset.meta.features[OBS_STATE]["names"],
+            action_names=dataset.meta.features[ACTION]["names"],
+        )
+
     # Create environment used for evaluating checkpoints during training on simulation data.
     # On real-world data, no need to create an environment as evaluations are done outside train.py,
     # using the eval.py instead, with gym_dora environment and dora-rs.
@@ -253,7 +279,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
     postprocessor_kwargs = {}
     if (cfg.policy.pretrained_path and not cfg.resume) or not cfg.policy.pretrained_path:
         # Only provide dataset_stats when not resuming from saved processor state
-        processor_kwargs["dataset_stats"] = dataset.meta.stats
+        processor_kwargs["dataset_stats"] = processor_dataset_stats
 
     # For SARM, always provide dataset_meta for progress normalization
     if cfg.policy.type == "sarm":
@@ -263,7 +289,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         processor_kwargs["preprocessor_overrides"] = {
             "device_processor": {"device": device.type},
             "normalizer_processor": {
-                "stats": dataset.meta.stats,
+                "stats": processor_dataset_stats,
                 "features": {**policy.config.input_features, **policy.config.output_features},
                 "norm_map": policy.config.normalization_mapping,
             },
@@ -273,7 +299,7 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         }
         postprocessor_kwargs["postprocessor_overrides"] = {
             "unnormalizer_processor": {
-                "stats": dataset.meta.stats,
+                "stats": processor_dataset_stats,
                 "features": policy.config.output_features,
                 "norm_map": policy.config.normalization_mapping,
             },
@@ -285,6 +311,17 @@ def train(cfg: TrainPipelineConfig, accelerator: Accelerator | None = None):
         **processor_kwargs,
         **postprocessor_kwargs,
     )
+
+    if joint_subset_names is not None:
+        preprocessor = insert_rby1_joint_subset_step(
+            preprocessor,
+            RBY1JointSubsetProcessorStep(
+                observation_state_names=list(dataset.meta.features[OBS_STATE]["names"]),
+                action_names=list(dataset.meta.features[ACTION]["names"]),
+                selected_state_names=list(joint_subset_names),
+                selected_action_names=list(joint_subset_names),
+            ),
+        )
 
     if is_main_process:
         logging.info("Creating optimizer and scheduler")
