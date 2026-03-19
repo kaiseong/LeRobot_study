@@ -8,15 +8,20 @@ set -euo pipefail
 # ── Robot ──
 ROBOT_ADDRESS="192.168.30.1:50051"
 ROBOT_MODEL="m"
-USE_IMPEDANCE=false         
+USE_IMPEDANCE=false
+COMMAND_MINIMUM_TIME=0.07
+CONTROL_HOLD_TIME=30.0
+CUTOFF_FREQUENCY=5.0
+COLLISION_CHECK=true
 
 # ── Master Arm ──
 MASTER_ARM_URDF="/home/$(whoami)/rby1-dev/external/rby1-sdk/models/master_arm/model.urdf"
 
-# ── Fixed Poses (radian) ──
-# torso: [0, 45, -90, 45, 0, 0]°  /  head: [0, 0]°
-FIXED_TORSO="[0.0, 0.7854, -1.5708, 0.7854, 0.0, 0.0]"
-FIXED_HEAD="[0.0, 0.0]"
+# ── Initial & Fixed Poses (degree, auto-converted to radian) ──
+FIXED_TORSO_DEG=(0.0 0.0 0.0 10.0 0.0 0.0)
+FIXED_HEAD_DEG=(0.0 45.0)
+INITIAL_RIGHT_ARM_DEG=(57.0 -14.0 5.0 -120.0 24.0 -37.0 58.0)
+INITIAL_LEFT_ARM_DEG=(57.0 14.0 -5.0 -120.0 -24.0 -37.0 -58.0)
 
 # ── Cameras ──
 CAMERAS='{
@@ -25,7 +30,7 @@ CAMERAS='{
 }'
 
 # ── Dataset ──
-REPO_ID="rainbowrobotics/rby1-right-arm-task"
+REPO_ID="kaiseong/rby1-right-arm-task"
 SINGLE_TASK="Pick up the object with right arm"
 FPS=15
 NUM_EPISODES=50
@@ -39,11 +44,32 @@ ENCODER_THREADS=2
 
 ###############################################################################
 
+# ── degree → radian 변환 ──
+deg2rad() {
+  local result=""
+  for deg in "$@"; do
+    rad=$(python3 -c "import math; print(round(math.radians($deg), 6))")
+    result="${result:+$result, }$rad"
+  done
+  echo "[$result]"
+}
+
+FIXED_TORSO=$(deg2rad "${FIXED_TORSO_DEG[@]}")
+FIXED_HEAD=$(deg2rad "${FIXED_HEAD_DEG[@]}")
+INITIAL_RIGHT_ARM=$(deg2rad "${INITIAL_RIGHT_ARM_DEG[@]}")
+INITIAL_LEFT_ARM=$(deg2rad "${INITIAL_LEFT_ARM_DEG[@]}")
+
 lerobot-record \
   --robot.type=rby1 \
   --robot.address="${ROBOT_ADDRESS}" \
   --robot.model="${ROBOT_MODEL}" \
   --robot.use_impedance="${USE_IMPEDANCE}" \
+  --robot.command_minimum_time="${COMMAND_MINIMUM_TIME}" \
+  --robot.control_hold_time="${CONTROL_HOLD_TIME}" \
+  --robot.joint_position_command_cutoff_frequency="${CUTOFF_FREQUENCY}" \
+  --robot.collision_check_enabled="${COLLISION_CHECK}" \
+  --robot.initial_right_arm_positions="${INITIAL_RIGHT_ARM}" \
+  --robot.initial_left_arm_positions="${INITIAL_LEFT_ARM}" \
   --robot.cameras="${CAMERAS}" \
   --teleop.type=master_arm \
   --teleop.robot_address="${ROBOT_ADDRESS}" \
