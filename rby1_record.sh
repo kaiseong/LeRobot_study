@@ -25,8 +25,9 @@ INITIAL_LEFT_ARM_DEG=(57.0 14.0 -5.0 -120.0 -24.0 -37.0 -58.0)
 
 # ── Cameras ──
 CAMERAS='{
-  front:   {type: intelrealsense, serial_number_or_name: "", width: 640, height: 480, fps: 15},
-  right: {type: intelrealsense, serial_number_or_name: "", width: 480, height: 640, fps: 15, rotation: 90}
+  front:   {type: intelrealsense, serial_number_or_name: "335122270761", width: 640, height: 480, fps: 15},
+  right: {type: intelrealsense, serial_number_or_name: "335122272086", width: 480, height: 640, fps: 15, rotation: 90},
+  left: {type: intelrealsense, serial_number_or_name: "230422270977", width: 480, height: 640, fps: 15, rotation: 270}
 }'
 
 # ── Dataset ──

@@ -14,7 +14,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional
 
-from piper_sdk import *  
+# from piper_sdk import *  # commented out: piper_sdk not installed
 
 from ..robot import Robot
 from ..utils import ensure_safe_goal_position

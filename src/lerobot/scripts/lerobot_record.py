@@ -115,12 +115,9 @@ from lerobot.robots import (  # noqa: F401
     make_robot_from_config,
     omx_follower,
     openarm_follower,
-    piper_follower,
     rby1,
     reachy2,
     so_follower,
-    so100_follower,
-    so101_follower,
     unitree_g1 as unitree_g1_robot,
 )
 from lerobot.robots.rby1.schema import FULL_ACTION_KEYS
@@ -135,7 +132,6 @@ from lerobot.teleoperators import (  # noqa: F401
     master_arm,
     omx_leader,
     openarm_leader,
-    piper_leader,
     openarm_mini,
     reachy2_teleoperator,
     so_leader,

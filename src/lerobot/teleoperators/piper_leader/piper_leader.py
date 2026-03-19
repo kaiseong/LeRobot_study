@@ -10,7 +10,7 @@ import math
 from typing import Dict, Optional
 from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 
-from piper_sdk import *  
+# from piper_sdk import *  # commented out: piper_sdk not installed
 from ..teleoperator import Teleoperator
 from .config_piper_leader import PIPERLeaderConfig
 
