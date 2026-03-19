@@ -47,6 +47,7 @@ def test_connect_disconnect(rby1_robot, fake_rby1_sdk):
     assert sdk_robot.power_on_calls == [rby1_robot.config.power_device_pattern]
     assert sdk_robot.servo_on_calls == [rby1_robot.config.servo_device_pattern]
     assert sdk_robot.create_command_stream_calls == [rby1_robot.config.command_priority]
+    assert sdk_robot.tool_flange_voltage_calls[:2] == [("right", 12), ("left", 12)]
     assert sdk_gripper.port_open is True
 
     rby1_robot.disconnect()
@@ -54,6 +55,7 @@ def test_connect_disconnect(rby1_robot, fake_rby1_sdk):
     assert sdk_robot.stream.cancelled is True
     assert sdk_robot.disable_control_manager_calls == 1
     assert sdk_robot.servo_off_calls == []
+    assert sdk_robot.tool_flange_voltage_calls[-2:] == [("right", 0), ("left", 0)]
 
 
 def test_disconnect_can_servo_off_when_enabled(fake_rby1_sdk):
@@ -97,8 +99,7 @@ def test_send_action_uses_command_stream(rby1_robot, fake_rby1_sdk):
     sdk_gripper = fake_rby1_sdk.created_buses[-1]
     assert returned == action
     assert len(sdk_robot.stream.sent_commands) == 1
-    # position_writes includes an initial write from gripper connect + the send_action write
-    assert len(sdk_gripper.position_writes) >= 1
+    assert len(sdk_gripper.position_writes) == 1
 
     command, timeout_ms = sdk_robot.stream.sent_commands[0]
     assert timeout_ms == rby1_robot.config.command_timeout_ms
@@ -110,7 +111,7 @@ def test_send_action_uses_command_stream(rby1_robot, fake_rby1_sdk):
         action[f"left_arm_{idx}"] for idx in range(7)
     ]
     assert command.command.head_command.position == [action["head_0"], action["head_1"]]
-    assert sdk_gripper.position_writes[-1] == [(0, 1000.5), (1, 999.5)]
+    assert sdk_gripper.position_writes[-1] == [(0, 999.5), (1, 999.5)]
 
 
 def test_send_action_impedance_mode(fake_rby1_sdk):

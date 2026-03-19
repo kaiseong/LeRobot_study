@@ -43,6 +43,8 @@ class RBY1GripperController:
         self._bus: Any | None = None
         self._min_q = np.full(len(self.device_ids), np.inf, dtype=float)
         self._max_q = np.full(len(self.device_ids), -np.inf, dtype=float)
+        self._open_q = np.full(len(self.device_ids), np.nan, dtype=float)
+        self._close_q = np.full(len(self.device_ids), np.nan, dtype=float)
         self._target_q: np.ndarray | None = None
         self._operating_mode: int | None = None
 
@@ -80,14 +82,21 @@ class RBY1GripperController:
             current_q = self._read_encoders()
             self._min_q = current_q - 1.0
             self._max_q = current_q + 1.0
+            self._update_open_close_ranges()
             self._set_operating_mode(self._rby.DynamixelBus.CurrentBasedPositionControlMode)
-        if self._target_q is None and np.isfinite(self._min_q).all() and np.isfinite(self._max_q).all():
-            self.set_targets([0.0] * len(self.device_ids))
 
     def disconnect(self) -> None:
         if not self.enabled or self._bus is None:
             return
+        try:
+            self._enable_torque(False)
+        except Exception:  # nosec B110
+            logger.debug("Ignoring gripper torque disable failure during disconnect.")
         self._bus = None
+        self._min_q = np.full(len(self.device_ids), np.inf, dtype=float)
+        self._max_q = np.full(len(self.device_ids), -np.inf, dtype=float)
+        self._open_q = np.full(len(self.device_ids), np.nan, dtype=float)
+        self._close_q = np.full(len(self.device_ids), np.nan, dtype=float)
         self._target_q = None
         self._operating_mode = None
 
@@ -119,13 +128,10 @@ class RBY1GripperController:
             )
         normalized = np.clip(normalized, 0.0, 1.0)
 
-        if not np.isfinite(self._min_q).all() or not np.isfinite(self._max_q).all():
+        if not np.isfinite(self._open_q).all() or not np.isfinite(self._close_q).all():
             raise RuntimeError("The RBY1 gripper controller is not calibrated.")
 
-        if self.direction_reversed:
-            target_q = normalized * (self._max_q - self._min_q) + self._min_q
-        else:
-            target_q = (1.0 - normalized) * (self._max_q - self._min_q) + self._min_q
+        target_q = self._open_q + normalized * (self._close_q - self._open_q)
 
         self._target_q = target_q
         self._set_operating_mode(self._rby.DynamixelBus.CurrentBasedPositionControlMode)
@@ -195,16 +201,39 @@ class RBY1GripperController:
 
         self._set_operating_mode(self._rby.DynamixelBus.CurrentBasedPositionControlMode)
         self._bus.group_sync_write_send_torque([(device_id, self.hold_torque) for device_id in self.device_ids])
+        self._update_open_close_ranges()
         logger.info("RBY1 gripper homing finished.")
 
     def _normalize_encoder_values(self, encoder_values: np.ndarray) -> np.ndarray:
-        if not np.isfinite(self._min_q).all() or not np.isfinite(self._max_q).all():
+        if not np.isfinite(self._open_q).all() or not np.isfinite(self._close_q).all():
             logger.debug("RBY1 gripper normalization is not available before calibration.")
             return np.zeros(len(self.device_ids), dtype=float)
 
-        denom = self._max_q - self._min_q
+        denom = self._close_q - self._open_q
         denom = np.where(np.isclose(denom, 0.0), 1.0, denom)
-        normalized = (encoder_values - self._min_q) / denom
-        if not self.direction_reversed:
-            normalized = 1.0 - normalized
+        normalized = (encoder_values - self._open_q) / denom
         return np.clip(normalized, 0.0, 1.0)
+
+    def _update_open_close_ranges(self) -> None:
+        if not np.isfinite(self._min_q).all() or not np.isfinite(self._max_q).all():
+            self._open_q = np.full(len(self.device_ids), np.nan, dtype=float)
+            self._close_q = np.full(len(self.device_ids), np.nan, dtype=float)
+            return
+
+        open_q = self._min_q.copy()
+        close_q = self._max_q.copy()
+
+        # The two finger motors are mirror-mounted on the UPC gripper bus.
+        # Keep the public normalization fixed as 0.0=open, 1.0=closed by
+        # assigning per-side open/close encoder anchors.
+        if len(self.device_ids) >= 2:
+            open_q[0] = self._min_q[0]
+            close_q[0] = self._max_q[0]
+            open_q[1] = self._max_q[1]
+            close_q[1] = self._min_q[1]
+
+        if self.direction_reversed:
+            open_q, close_q = close_q, open_q
+
+        self._open_q = open_q
+        self._close_q = close_q

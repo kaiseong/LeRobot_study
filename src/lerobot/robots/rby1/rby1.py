@@ -78,6 +78,7 @@ class RBY1(Robot):
         self._dyn_model: Any | None = None
         self._dyn_state: Any | None = None
         self._cached_position: np.ndarray | None = None
+        self._gripper_tool_flanges_powered = False
         self._gripper = self._build_gripper_controller()
         self.cameras = make_cameras_from_configs(config.cameras)
 
@@ -159,6 +160,7 @@ class RBY1(Robot):
             self.configure()
             self._command_stream = robot.create_command_stream(self.config.command_priority)
 
+            self._set_gripper_tool_flange_voltage(robot, 12)
             self._gripper.connect()
             for camera in self.cameras.values():
                 if not camera.is_connected:
@@ -326,6 +328,10 @@ class RBY1(Robot):
                 self._gripper.disconnect()
             finally:
                 try:
+                    self._set_gripper_tool_flange_voltage(robot, 0)
+                except Exception:  # nosec B110
+                    logger.debug("Ignoring tool-flange power-off failure during disconnect.")
+                try:
                     robot.disconnect()
                 finally:
                     self._command_stream = None
@@ -335,6 +341,7 @@ class RBY1(Robot):
                     self._dyn_model = None
                     self._dyn_state = None
                     self._cached_position = None
+                    self._gripper_tool_flanges_powered = False
 
     def _read_full_state(self) -> dict[str, float]:
         if self._robot is None:
@@ -463,6 +470,28 @@ class RBY1(Robot):
             home_on_connect=self.config.gripper_home_on_connect,
         )
 
+    def _set_gripper_tool_flange_voltage(self, robot: Any, voltage: int) -> None:
+        if not self.config.enable_grippers:
+            return
+
+        target_voltage = int(voltage)
+        if target_voltage == 12 and self._gripper_tool_flanges_powered:
+            return
+        if target_voltage == 0 and not self._gripper_tool_flanges_powered:
+            return
+
+        for arm in ("right", "left"):
+            if not robot.set_tool_flange_output_voltage(arm, target_voltage):
+                raise ConnectionError(
+                    f"Failed to set RBY1 tool flange voltage for {arm} arm to {target_voltage}V."
+                )
+
+        if target_voltage > 0:
+            time.sleep(0.5)
+            self._gripper_tool_flanges_powered = True
+        else:
+            self._gripper_tool_flanges_powered = False
+
     def _build_fixed_action_values(self) -> dict[str, float]:
         fixed_values: dict[str, float] = {}
         if self.config.fixed_torso_positions is not None:
@@ -501,6 +530,11 @@ class RBY1(Robot):
             logger.debug("Ignoring gripper disconnect failure during connect cleanup.")
 
         try:
+            self._set_gripper_tool_flange_voltage(robot, 0)
+        except Exception:  # nosec B110
+            logger.debug("Ignoring tool-flange power-off failure during connect cleanup.")
+
+        try:
             robot.disconnect()
         except Exception:  # nosec B110
             logger.debug("Ignoring robot disconnect failure during connect cleanup.")
@@ -512,6 +546,7 @@ class RBY1(Robot):
         self._dyn_model = None
         self._dyn_state = None
         self._cached_position = None
+        self._gripper_tool_flanges_powered = False
 
     @staticmethod
     def _is_control_manager_fault(control_manager_state: Any) -> bool:

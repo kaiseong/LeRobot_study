@@ -252,6 +252,8 @@ class FakeRobot:
         self.power_on_calls = []
         self.power_off_calls = []
         self.servo_on_calls = []
+        self.tool_flange_voltage_calls = []
+        self.tool_flange_voltage = {"right": 0, "left": 0}
         self.reset_fault_calls = 0
         self.position = [0.01 * idx for idx in range(26)]
         self.stream = FakeCommandStream()
@@ -295,6 +297,12 @@ class FakeRobot:
     def servo_off(self, dev_name):
         self.servo_off_calls.append(dev_name)
         self._servo_on = False
+        return True
+
+    def set_tool_flange_output_voltage(self, arm, voltage):
+        self.tool_flange_voltage_calls.append((arm, voltage))
+        self.tool_flange_voltage[str(arm)] = int(voltage)
+        FakeDynamixelBus._tool_flange_voltage = dict(self.tool_flange_voltage)
         return True
 
     def get_control_manager_state(self):
@@ -520,6 +528,7 @@ class FakeDynamixelBus:
     CurrentControlMode = 0
     CurrentBasedPositionControlMode = 5
     _instance_sink = None
+    _tool_flange_voltage = {"right": 0, "left": 0}
 
     def __init__(self, dev_name: str):
         self.dev_name = dev_name
@@ -547,6 +556,11 @@ class FakeDynamixelBus:
         return True
 
     def ping(self, dev_id):
+        if self.dev_name == FakeUPCModule.GripperDeviceName:
+            if self._tool_flange_voltage.get("right", 0) != 12:
+                return False
+            if self._tool_flange_voltage.get("left", 0) != 12:
+                return False
         return dev_id in {0, 1}
 
     def group_sync_write_torque_enable(self, id_and_enable_vector):
@@ -588,6 +602,7 @@ class FakeRBY1SDK:
         self.upc = FakeUPCModule()
         self.created_buses = []
         FakeDynamixelBus._instance_sink = self.created_buses
+        FakeDynamixelBus._tool_flange_voltage = {"right": 0, "left": 0}
 
     def create_robot(self, address: str, model: str):
         robot = FakeRobot(address, model)
