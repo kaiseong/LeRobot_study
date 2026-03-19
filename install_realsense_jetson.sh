@@ -52,7 +52,14 @@ else
     cd "${INSTALL_DIR}"
 fi
 
-# ── 3. 빌드 ──
+# ── 3. CMakeLists.txt 호환성 패치 (CMake 3.27+ 대응) ──
+# 오래된 cmake_minimum_required(VERSION 2.8.3) → 3.5로 상향
+if grep -q 'cmake_minimum_required.*VERSION.*2\.' CMakeLists.txt 2>/dev/null; then
+    echo "  CMakeLists.txt cmake_minimum_required 패치 적용..."
+    sed -i 's/cmake_minimum_required(\s*VERSION\s*[0-9.]\+/cmake_minimum_required(VERSION 3.5/' CMakeLists.txt
+fi
+
+# ── 4. 빌드 ──
 echo "[3/6] CMake 빌드 (Python 바인딩 포함)..."
 mkdir -p build && cd build
 cmake .. \
